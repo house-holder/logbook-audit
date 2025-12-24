@@ -1,4 +1,5 @@
 import csv
+import os
 import re
 import sys
 from collections import defaultdict
@@ -19,6 +20,55 @@ You've been warned.
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SIM_AIRCRAFT_RE = re.compile(r"^(UAA\s*SIM\b|SIM\d+\b|AATD\b|FTD\b)")
+MISMATCH_RE = re.compile(r"\(FF (?P<ff>-?\d+(?:\.\d+)?), LT (?P<lt>-?\d+(?:\.\d+)?)\)")
+
+
+def _supports_color() -> bool:
+    return sys.stdout.isatty() and os.environ.get("NO_COLOR") is None and os.environ.get("TERM") != "dumb"
+
+
+def _style(s: str, *codes: str) -> str:
+    if not _supports_color():
+        return s
+    return f"\033[{';'.join(codes)}m{s}\033[0m"
+
+
+def _blue(s: str) -> str:
+    return _style(s, "34")
+def _blue_bold(s: str) -> str:
+    return _style(s, "1", "34")
+
+def _green(s: str) -> str:
+    return _style(s, "32")
+def _dim_green(s: str) -> str:
+    return _style(s, "2", "32")
+
+
+
+
+def _red(s: str) -> str:
+    return _style(s, "31")
+def _red_bold(s: str) -> str:
+    return _style(s, "1", "31")
+
+
+def _color_mismatch_reason(reason: str) -> str:
+    def repl(m: re.Match[str]) -> str:
+        ff_raw = m.group("ff")
+        lt_raw = m.group("lt")
+        ff = float(ff_raw)
+        lt = float(lt_raw)
+
+        if ff < lt:
+            ffStr = _red(f"FF {ff_raw}")
+            ltStr = f"LT {lt_raw}"
+        elif lt < ff:
+            ltStr = _red(f"LT {lt_raw}")
+            ffStr = f"FF {ff_raw}"
+
+        return f"({ffStr}, {ltStr})"
+
+    return MISMATCH_RE.sub(repl, reason)
 
 
 def _to_float(s: str) -> float:
@@ -337,11 +387,13 @@ def _print_totals_report(*, ff_flights: List[Dict[str, str]], lt_flights: List[D
         ("NightXC", ff_totals["NightXC"], lt_totals["NightXC"]),
     ]
 
-    print("========= Logbook Comparison Report =========")
+    print(_dim_green("\n========= Logbook Comparison Report ========="))
     print(f"{'':14}{'ForeFlight':>11}{'LogTen':>10}{'DIFF':>8}")
     for label, ff, lt in rows:
         diff = _diff_cell(ff, lt, tol=tol)
-        print(f"{label:<14}{ff:>11.1f}{lt:>10.1f}{diff:>8}")
+        line = f"{label:<14}{ff:>11.1f}{lt:>10.1f}{diff:>8}"
+        is_match = abs(ff - lt) <= tol
+        print(_green(line) if is_match else _red(line))
 
 
 def _suggest_nearby_matches(
@@ -593,13 +645,17 @@ def main(argv: List[str]) -> int:
                     }
                 )
 
-    print("\n=== Flagged Entries ===")
+    print(_dim_green("\nFlagged Entries"))
     if not flagged:
-        print("(none)")
+        print("(none)\n")
     else:
         ac_w = max((len(r["aircraft"]) for r in flagged), default=0)
         for r in flagged:
-            print(f"- {r['date']} {r['aircraft']:<{ac_w}} {r['tt']:>4} — {r['reason']}")
+            header = f"{r['date']} {r['aircraft']:<{ac_w}} {r['tt']:>4}"
+            header = _blue(header)
+            reason = _color_mismatch_reason(r["reason"])
+            print(f"  {header} — {reason}")  
+        print()
 
     return 0
 
