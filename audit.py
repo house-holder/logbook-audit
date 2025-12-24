@@ -1,4 +1,6 @@
 import csv
+import contextlib
+import io
 import os
 import re
 import sys
@@ -24,7 +26,8 @@ MISMATCH_RE = re.compile(r"\(FF (?P<ff>-?\d+(?:\.\d+)?), LT (?P<lt>-?\d+(?:\.\d+
 
 
 def _supports_color() -> bool:
-    return sys.stdout.isatty() and os.environ.get("NO_COLOR") is None and os.environ.get("TERM") != "dumb"
+    isatty = getattr(sys.stdout, "isatty", None)
+    return bool(isatty and isatty()) and os.environ.get("NO_COLOR") is None and os.environ.get("TERM") != "dumb"
 
 
 def _style(s: str, *codes: str) -> str:
@@ -471,7 +474,67 @@ def _suggest_nearby_matches(
 
 
 
+def _run_selftest() -> int:
+    base = Path(__file__).resolve().parent
+    ff = base / "test" / "ff.csv"
+    lt = base / "test" / "lt.txt"
+
+    if not ff.exists() or not lt.exists():
+        print(f"self-test: missing fixture files: {ff} {lt}")
+        return 2
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = main([sys.argv[0], str(ff), str(lt)])
+
+    out = buf.getvalue()
+
+    def require(pattern: str, desc: str) -> Optional[str]:
+        if re.search(pattern, out, flags=re.M) is None:
+            return desc
+        return None
+
+    failures: List[str] = []
+    failures.extend(
+        f
+        for f in [
+            require(r"Logbook Comparison Report", "missing report header"),
+            require(r"^Total Time\s+6\.8\s+6\.9\s+-0\.1\s*$", "totals: Total Time line mismatch"),
+            require(r"^Dual Given\s+1\.2\s+0\.8\s+0\.4\s*$", "totals: Dual Given line mismatch"),
+            require(r"^Flagged Entries\s*$", "missing flagged entries header"),
+            require(r"^\s{2}2025-01-05\s+N999ZZ\s+0\.9\s+—\s+Missing in ForeFlight\s*$", "missing flagged: 2025-01-05 Missing in ForeFlight"),
+            require(r"^\s{2}2025-01-04\s+N123AB\s+0\.8\s+—\s+Missing in LogTen\s*$", "missing flagged: 2025-01-04 Missing in LogTen"),
+            require(r"^\s{2}2025-01-03\s+N123AB\s+2\.0\s+—\s+DualGiven\s+\(FF 1\.2, LT 0\.8\)\s*$", "missing flagged: 2025-01-03 DualGiven mismatch"),
+            require(
+                r"^\s{2}2025-01-02\s+N123AB\s+1\.1\s+—\s+Night\s+\(FF 0\.4, LT 0\.6\);\s+NightXC\s+\(FF 0\.4, LT 0\.6\)\s*$",
+                "missing flagged: 2025-01-02 Night/NightXC mismatch",
+            ),
+        ]
+        if f is not None
+    )
+
+    flagged_lines = re.findall(r"^\s{2}\d{4}-\d{2}-\d{2}\s+", out, flags=re.M)
+    if len(flagged_lines) != 4:
+        failures.append(f"expected 4 flagged entries, got {len(flagged_lines)}")
+
+    if rc != 0:
+        failures.append(f"expected exit code 0 from audit run, got {rc}")
+
+    if failures:
+        print("self-test: FAIL")
+        for f in failures:
+            print(f"  - {f}")
+        print("\n--- captured output ---")
+        print(out.rstrip("\n"))
+        return 1
+
+    print("self-test: PASS")
+    return 0
+
+
 def main(argv: List[str]) -> int:
+    if len(argv) >= 2 and argv[1] == "test":
+        return _run_selftest()
     if len(argv) < 3:
         print(
             "Usage: python audit_logbooks.py <foreflight_csv> <logten_tsv> "
