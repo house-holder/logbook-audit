@@ -6,6 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+"""
+Note from the repo owner:
+
+This was entirely, 100% vibe coded by an LLM. I needed to audit my two
+digital logbooks, and instead of the LLM simply scanning the files itself
+(as requested), it elected to write a Python script. It is narrowly scoped
+to my own specific use case. It probably will suck for anyone else.
+
+You've been warned.
+"""
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SIM_AIRCRAFT_RE = re.compile(r"^(UAA\s*SIM\b|SIM\d+\b|AATD\b|FTD\b)")
