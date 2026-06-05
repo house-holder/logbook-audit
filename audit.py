@@ -27,7 +27,9 @@ MISMATCH_RE = re.compile(r"\(FF (?P<ff>-?\d+(?:\.\d+)?), LT (?P<lt>-?\d+(?:\.\d+
 
 def _supports_color() -> bool:
     isatty = getattr(sys.stdout, "isatty", None)
-    return bool(isatty and isatty()) and os.environ.get("NO_COLOR") is None and os.environ.get("TERM") != "dumb"
+    return bool(isatty and isatty()) and \
+    os.environ.get("NO_COLOR") is None and \
+    os.environ.get("TERM") != "dumb"
 
 
 def _style(s: str, *codes: str) -> str:
@@ -45,9 +47,6 @@ def _green(s: str) -> str:
     return _style(s, "32")
 def _dim_green(s: str) -> str:
     return _style(s, "2", "32")
-
-
-
 
 def _red(s: str) -> str:
     return _style(s, "31")
@@ -81,7 +80,6 @@ def _to_float(s: str) -> float:
     try:
         return float(s)
     except ValueError:
-        # Sometimes values can be like "0" or "0.00" already handled above; if not, treat as 0.
         return 0.0
 
 
