@@ -97,7 +97,7 @@ def _is_sim_aircraft_id(aircraft_id: str) -> bool:
     return False
 
 
-def _read_foreflight_flights(path: Path) -> list[dict[str, str]]:
+def _read_foreflight_flights(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     rows: list[list[str]] = []
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.reader(f)
@@ -127,7 +127,7 @@ def _read_foreflight_flights(path: Path) -> list[dict[str, str]]:
             rec[name] = r[j].strip() if j < len(r) else ""
         flights.append(rec)
 
-    return flights
+    return header, flights
 
 
 def _read_logten_flights(path: Path) -> list[dict[str, str]]:
@@ -239,6 +239,9 @@ def _pick_best_custom_time_columns(
     lt_flights: list[dict[str, str]],
     targets: dict[str, float],
 ) -> dict[str, str]:
+    if not targets:
+        return {}
+
     custom_cols = [f"flight_customTime{i}" for i in range(1, 21)]
     col_sums = {c: _sum_field(lt_flights, c) for c in custom_cols}
 
@@ -341,7 +344,13 @@ def _fmt_hours(s: str) -> str:
     return f"{_to_float(s):.1f}"
 
 
-def _diff_cell(ff: float, lt: float, tol: float) -> str:
+def _fmt_val(v: float | None) -> str:
+    return "--" if v is None else f"{v:.1f}"
+
+
+def _diff_cell(ff: float | None, lt: float | None, tol: float) -> str:
+    if ff is None or lt is None:
+        return "--"
     d = ff - lt
     return "--" if abs(d) <= tol else f"{d:.1f}"
 
@@ -350,9 +359,10 @@ def _print_totals_report(
     *,
     ff_totals: dict[str, float],
     lt_totals: dict[str, float],
-    tol: float
+    tol: float,
+    custom_field_status: dict[str, tuple[bool, bool]] | None = None,
 ) -> None:
-    rows: list[tuple[str, float, float]] = [
+    rows: list[tuple[str, float | None, float | None]] = [
         ("Total Time", ff_totals["TotalTime"], lt_totals["TotalTime"]),
         ("PIC", ff_totals["PIC"], lt_totals["PIC"]),
         ("  + Non-CFI", ff_totals["PICNonCFI"], lt_totals["PICNonCFI"]),
@@ -363,72 +373,145 @@ def _print_totals_report(
         ("Sim IMC", ff_totals["SimulatedInstrument"], lt_totals["SimulatedInstrument"]),
         ("Dual Given", ff_totals["DualGiven"], lt_totals["DualGiven"]),
         ("Dual Received", ff_totals["DualReceived"], lt_totals["DualReceived"]),
-        ("135XC", ff_totals["135XC"], lt_totals["135XC"]),
-        ("ATPXC", ff_totals["ATPXC"], lt_totals["ATPXC"]),
-        ("NightXC", ff_totals["NightXC"], lt_totals["NightXC"]),
     ]
+
+    if custom_field_status:
+        for label, key in [("135XC", "135XC"), ("ATPXC", "ATPXC"), ("NightXC", "NightXC")]:
+            ff_exists, lt_exists = custom_field_status.get(key, (False, False))
+            if not ff_exists and not lt_exists:
+                continue
+            rows.append((
+                label,
+                ff_totals.get(key, 0.0) if ff_exists else None,
+                lt_totals.get(key, 0.0) if lt_exists else None,
+            ))
 
     print(_dim_green("\n========= Logbook Comparison Report ========="))
     print(f"{'':14}{'ForeFlight':>11}{'LogTen':>10}{'DIFF':>8}")
     for label, ff, lt in rows:
-        diff = _diff_cell(ff, lt, tol=tol)
-        line = f"{label:<14}{ff:>11.1f}{lt:>10.1f}{diff:>8}"
-        is_match = abs(ff - lt) <= tol
-        print(_green(line) if is_match else _red(line))
+        ff_str = _fmt_val(ff)
+        lt_str = _fmt_val(lt)
+        diff_str = _diff_cell(ff, lt, tol=tol)
+        line = f"{label:<14}{ff_str:>11}{lt_str:>10}{diff_str:>8}"
+        is_match = ff is not None and lt is not None and abs(ff - lt) <= tol
+        if ff is None or lt is None:
+            print(line)
+        elif is_match:
+            print(_green(line))
+        else:
+            print(_red(line))
 
 
 def _run_selftest() -> int:
     base = Path(__file__).resolve().parent
-    ff = base / "test" / "ff.csv"
-    lt = base / "test" / "lt.txt"
 
-    if not ff.exists() or not lt.exists():
-        print(f"self-test: missing fixture files: {ff} {lt}")
-        return 2
+    def _run_one(ff_name: str, lt_name: str, checks: list[tuple[str, str]]) -> list[str]:
+        ff_path = base / "test" / ff_name
+        lt_path = base / "test" / lt_name
+        if not ff_path.exists() or not lt_path.exists():
+            return [f"missing fixture: {ff_path} or {lt_path}"]
 
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        rc = main([sys.argv[0], str(ff), str(lt)])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main([sys.argv[0], str(ff_path), str(lt_path)])
+        out = buf.getvalue()
 
-    out = buf.getvalue()
+        failures: list[str] = []
+        if rc != 0:
+            failures.append(f"expected exit code 0, got {rc}")
 
-    def require(pattern: str, desc: str) -> str | None:
-        if re.search(pattern, out, flags=re.M) is None:
-            return desc
-        return None
+        for pattern, desc in checks:
+            if re.search(pattern, out, flags=re.M) is None:
+                failures.append(desc)
+
+        if failures:
+            print(f"--- captured output ({ff_name} / {lt_name}) ---")
+            print(out.rstrip("\n"))
+        return failures
+
+    def _check_absent(pat: str, desc: str, out: str) -> str | None:
+        return None if re.search(pat, out, flags=re.M) is None else desc
 
     failures: list[str] = []
-    failures.extend(
-        f
-        for f in [
-            require(r"Logbook Comparison Report", "missing report header"),
-            require(r"^Total Time\s+6\.8\s+6\.9\s+-0\.1\s*$", "totals: Total Time line mismatch"),
-            require(r"^Dual Given\s+1\.2\s+0\.8\s+0\.4\s*$", "totals: Dual Given line mismatch"),
-            require(r"^Flagged Entries\s*$", "missing flagged entries header"),
-            require(r"^\s{2}2025-01-05\s+N999ZZ\s+0\.9\s+—\s+Missing in ForeFlight\s*$", "missing flagged: 2025-01-05 Missing in ForeFlight"),
-            require(r"^\s{2}2025-01-04\s+N123AB\s+0\.8\s+—\s+Missing in LogTen\s*$", "missing flagged: 2025-01-04 Missing in LogTen"),
-            require(r"^\s{2}2025-01-03\s+N123AB\s+2\.0\s+—\s+DualGiven\s+\(FF 1\.2, LT 0\.8\)\s*$", "missing flagged: 2025-01-03 DualGiven mismatch"),
-            require(
-                r"^\s{2}2025-01-02\s+N123AB\s+1\.1\s+—\s+Night\s+\(FF 0\.4, LT 0\.6\);\s+NightXC\s+\(FF 0\.4, LT 0\.6\)\s*$",
-                "missing flagged: 2025-01-02 Night/NightXC mismatch",
-            ),
-        ]
-        if f is not None
-    )
 
-    flagged_lines = re.findall(r"^\s{2}\d{4}-\d{2}-\d{2}\s+", out, flags=re.M)
-    if len(flagged_lines) != 4:
-        failures.append(f"expected 4 flagged entries, got {len(flagged_lines)}")
-
-    if rc != 0:
-        failures.append(f"expected exit code 0 from audit run, got {rc}")
+    # --- Fixture test (custom fields present) ---
+    failures.extend(_run_one("ff.csv", "lt.txt", [
+        (r"Logbook Comparison Report", "missing report header"),
+        (r"^Total Time\s+6\.8\s+6\.9\s+-0\.1\s*$", "totals: Total Time line mismatch"),
+        (r"^Dual Given\s+1\.2\s+0\.8\s+0\.4\s*$", "totals: Dual Given line mismatch"),
+        (r"^Flagged Entries\s*$", "missing flagged entries header"),
+        (r"^\s{2}2025-01-05\s+N999ZZ\s+0\.9\s+—\s+Missing in ForeFlight\s*$",
+         "missing flagged: 2025-01-05 Missing in ForeFlight"),
+        (r"^\s{2}2025-01-04\s+N123AB\s+0\.8\s+—\s+Missing in LogTen\s*$",
+         "missing flagged: 2025-01-04 Missing in LogTen"),
+        (r"^\s{2}2025-01-03\s+N123AB\s+2\.0\s+—\s+DualGiven\s+\(FF 1\.2, LT 0\.8\)\s*$",
+         "missing flagged: 2025-01-03 DualGiven mismatch"),
+        (r"^\s{2}2025-01-02\s+N123AB\s+1\.1\s+—\s+Night\s+\(FF 0\.4, LT 0\.6\);\s+"
+         r"NightXC\s+\(FF 0\.4, LT 0\.6\)\s*$",
+         "missing flagged: 2025-01-02 Night/NightXC mismatch"),
+    ]))
+    # Also verify flagged entry count for the fixture test
+    ff_buf = io.StringIO()
+    with contextlib.redirect_stdout(ff_buf):
+        main([sys.argv[0], str(base / "test" / "ff.csv"), str(base / "test" / "lt.txt")])
+    ff_out = ff_buf.getvalue()
+    flagged1 = re.findall(r"^\s{2}\d{4}-\d{2}-\d{2}\s+", ff_out, flags=re.M)
+    if len(flagged1) != 4:
+        failures.append(f"fixture: expected 4 flagged entries, got {len(flagged1)}")
 
     if failures:
-        print("self-test: FAIL")
+        print("self-test: FAIL (fixture)")
         for f in failures:
             print(f"  - {f}")
-        print("\n--- captured output ---")
-        print(out.rstrip("\n"))
+        return 1
+
+    # --- No-custom test (custom fields absent) ---
+    nc_failures: list[str] = []
+    nc_buf = io.StringIO()
+    with contextlib.redirect_stdout(nc_buf):
+        nc_rc = main([sys.argv[0],
+                      str(base / "test" / "ff_no_custom.csv"),
+                      str(base / "test" / "lt_no_custom.txt")])
+    nc_out = nc_buf.getvalue()
+
+    if nc_rc != 0:
+        nc_failures.append(f"no-custom: expected exit code 0, got {nc_rc}")
+
+    if not re.search(r"Logbook Comparison Report", nc_out, flags=re.M):
+        nc_failures.append("no-custom: missing report header")
+
+    if not re.search(r"^Total Time\s+6\.8\s+6\.9\s+-0\.1\s*$", nc_out, flags=re.M):
+        nc_failures.append("no-custom: Total Time line mismatch")
+
+    absent = _check_absent(r"^135XC\s+", "no-custom: 135XC row should not appear", nc_out)
+    if absent:
+        nc_failures.append(absent)
+
+    absent = _check_absent(r"^ATPXC\s+", "no-custom: ATPXC row should not appear", nc_out)
+    if absent:
+        nc_failures.append(absent)
+
+    if not re.search(r"^NightXC\s+--\s+0\.8\s+--\s*$", nc_out, flags=re.M):
+        nc_failures.append("no-custom: NightXC row missing or incorrect format")
+
+    if not re.search(r"^Flagged Entries\s*$", nc_out, flags=re.M):
+        nc_failures.append("no-custom: missing flagged entries header")
+
+    flagged2 = re.findall(r"^\s{2}\d{4}-\d{2}-\d{2}\s+", nc_out, flags=re.M)
+    if len(flagged2) != 4:
+        nc_failures.append(f"no-custom: expected 4 flagged entries, got {len(flagged2)}")
+
+    # NightXC per-flight diffs should be absent since FF doesn't track it
+    flagged_section = re.split(r"^Flagged Entries\s*$", nc_out, flags=re.M)
+    if len(flagged_section) > 1 and re.search(r"NightXC", flagged_section[1]):
+        nc_failures.append("no-custom: NightXC should not appear in flagged entries")
+
+    if nc_failures:
+        print("self-test: FAIL (no-custom)")
+        for f in nc_failures:
+            print(f"  - {f}")
+        print("--- captured output (no-custom) ---")
+        print(nc_out.rstrip("\n"))
         return 1
 
     print("self-test: PASS")
@@ -473,7 +556,7 @@ def main(argv: list[str]) -> int:
             print(f"Unknown arg: {argv[i]}")
             return 2
 
-    ff_flights = _read_foreflight_flights(ff_path)
+    ff_header, ff_flights = _read_foreflight_flights(ff_path)
     lt_flights = _read_logten_flights(lt_path)
 
     if not include_sim:
@@ -493,28 +576,41 @@ def main(argv: list[str]) -> int:
         print("No LogTen flight rows found.")
         return 1
 
-    ff_totals = {
-        "TotalTime": _sum_field(ff_flights, "TotalTime"),
-        "PIC": _sum_field(ff_flights, "PIC"),
-        "Night": _sum_field(ff_flights, "Night"),
-        "Solo": _sum_field(ff_flights, "Solo"),
-        "CrossCountry": _sum_field(ff_flights, "CrossCountry"),
-        "ActualInstrument": _sum_field(ff_flights, "ActualInstrument"),
-        "SimulatedInstrument": _sum_field(ff_flights, "SimulatedInstrument"),
-        "DualGiven": _sum_field(ff_flights, "DualGiven"),
-        "DualReceived": _sum_field(ff_flights, "DualReceived"),
-        "135XC": _sum_field(ff_flights, "[Hours]135 XC"),
-        "ATPXC": _sum_field(ff_flights, "[Hours]ATPXC"),
-        "NightXC": _sum_field(ff_flights, "[Hours]Night XC"),
-    }
-    ff_totals["PICNonCFI"] = ff_totals["PIC"] - ff_totals["DualGiven"]
+    ff_cols = set(ff_header)
 
-    ff_custom_targets = {
-        "135XC": ff_totals["135XC"],
-        "ATPXC": ff_totals["ATPXC"],
-        "NightXC": ff_totals["NightXC"],
-    }
+    ff_has_135xc = "[Hours]135 XC" in ff_cols
+    ff_has_atpxc = "[Hours]ATPXC" in ff_cols
+    ff_has_night_xc = "[Hours]Night XC" in ff_cols
+
+    ff_custom_keys: set[str] = set()
+    if ff_has_135xc:
+        ff_custom_keys.add("135XC")
+    if ff_has_atpxc:
+        ff_custom_keys.add("ATPXC")
+    if ff_has_night_xc:
+        ff_custom_keys.add("NightXC")
+
+    ff_custom_targets: dict[str, float] = {}
+    if ff_has_135xc:
+        ff_custom_targets["135XC"] = _sum_field(ff_flights, "[Hours]135 XC")
+    if ff_has_atpxc:
+        ff_custom_targets["ATPXC"] = _sum_field(ff_flights, "[Hours]ATPXC")
+    if ff_has_night_xc:
+        ff_custom_targets["NightXC"] = _sum_field(ff_flights, "[Hours]Night XC")
+
     custom_map = _pick_best_custom_time_columns(lt_flights, ff_custom_targets)
+
+    lt_has_135xc = "135XC" in custom_map
+    lt_has_atpxc = "ATPXC" in custom_map
+    lt_has_night_xc = derived_night_xc or "NightXC" in custom_map
+
+    custom_field_status: dict[str, tuple[bool, bool]] = {}
+    if ff_has_135xc or lt_has_135xc:
+        custom_field_status["135XC"] = (ff_has_135xc, lt_has_135xc)
+    if ff_has_atpxc or lt_has_atpxc:
+        custom_field_status["ATPXC"] = (ff_has_atpxc, lt_has_atpxc)
+    if ff_has_night_xc or lt_has_night_xc:
+        custom_field_status["NightXC"] = (ff_has_night_xc, lt_has_night_xc)
 
     if verbose:
         print("=== Detected LogTen custom time mapping (best guess) ===")
@@ -524,7 +620,26 @@ def main(argv: list[str]) -> int:
         if derived_night_xc:
             print("NightXC: using derived NightXC = flight_night if flight_crossCountry > 0 else 0")
 
-    lt_totals = {
+    ff_totals: dict[str, float] = {
+        "TotalTime": _sum_field(ff_flights, "TotalTime"),
+        "PIC": _sum_field(ff_flights, "PIC"),
+        "Night": _sum_field(ff_flights, "Night"),
+        "Solo": _sum_field(ff_flights, "Solo"),
+        "CrossCountry": _sum_field(ff_flights, "CrossCountry"),
+        "ActualInstrument": _sum_field(ff_flights, "ActualInstrument"),
+        "SimulatedInstrument": _sum_field(ff_flights, "SimulatedInstrument"),
+        "DualGiven": _sum_field(ff_flights, "DualGiven"),
+        "DualReceived": _sum_field(ff_flights, "DualReceived"),
+    }
+    if ff_has_135xc:
+        ff_totals["135XC"] = ff_custom_targets["135XC"]
+    if ff_has_atpxc:
+        ff_totals["ATPXC"] = ff_custom_targets["ATPXC"]
+    if ff_has_night_xc:
+        ff_totals["NightXC"] = ff_custom_targets["NightXC"]
+    ff_totals["PICNonCFI"] = ff_totals["PIC"] - ff_totals["DualGiven"]
+
+    lt_totals: dict[str, float] = {
         "TotalTime": sum(_to_float(_lt_field(r, "flight_totalTime")) for r in lt_flights),
         "PIC": sum(_to_float(_lt_field(r, "flight_pic")) for r in lt_flights),
         "Night": sum(_to_float(_lt_field(r, "flight_night")) for r in lt_flights),
@@ -534,20 +649,22 @@ def main(argv: list[str]) -> int:
         "SimulatedInstrument": sum(_to_float(_lt_field(r, "flight_simulatedInstrument")) for r in lt_flights),
         "DualGiven": sum(_to_float(_lt_field(r, "flight_dualGiven")) for r in lt_flights),
         "DualReceived": sum(_to_float(_lt_field(r, "flight_dualReceived")) for r in lt_flights),
-        "135XC": _sum_field(lt_flights, custom_map.get("135XC", "")) if custom_map.get("135XC") else 0.0,
-        "ATPXC": _sum_field(lt_flights, custom_map.get("ATPXC", "")) if custom_map.get("ATPXC") else 0.0,
-        "NightXC": (
-            sum(
-                (_to_float(_lt_field(r, "flight_night")) if _to_float(_lt_field(r, "flight_crossCountry")) > 0.0 else 0.0)
-                for r in lt_flights
-            )
-            if derived_night_xc
-            else (_sum_field(lt_flights, custom_map.get("NightXC", "")) if custom_map.get("NightXC") else 0.0)
-        ),
     }
+    if lt_has_135xc:
+        lt_totals["135XC"] = _sum_field(lt_flights, custom_map["135XC"])
+    if lt_has_atpxc:
+        lt_totals["ATPXC"] = _sum_field(lt_flights, custom_map["ATPXC"])
+    if lt_has_night_xc:
+        lt_totals["NightXC"] = (sum(
+            _to_float(_lt_field(r, "flight_night")) if _to_float(_lt_field(r, "flight_crossCountry")) > 0.0 else 0.0
+            for r in lt_flights
+        ) if derived_night_xc else _sum_field(lt_flights, custom_map["NightXC"]))
     lt_totals["PICNonCFI"] = lt_totals["PIC"] - lt_totals["DualGiven"]
 
-    _print_totals_report(ff_totals=ff_totals, lt_totals=lt_totals, tol=tol)
+    _print_totals_report(
+        ff_totals=ff_totals, lt_totals=lt_totals, tol=tol,
+        custom_field_status=custom_field_status,
+    )
 
     ff_grouped = _group_by_date_aircraft(ff_flights, "Date", "AircraftID")
     lt_grouped = _group_by_date_aircraft(lt_flights, "flight_flightDate", "aircraft_aircraftID")
@@ -601,12 +718,18 @@ def main(argv: list[str]) -> int:
                           "ActualInstrument", "SimulatedInstrument",
                           "DualReceived", "DualGiven", "Solo", "135XC",
                           "ATPXC", "NightXC"]:
+                    if k in ("135XC", "ATPXC", "NightXC") and k not in ff_custom_keys:
+                        continue
                     if k in diffs:
                         av, bv, _ = diffs[k]
                         parts.append(f"{k} (FF {av:.1f}, LT {bv:.1f})")
                 if not parts:
                     for k, (av, bv, _) in diffs.items():
+                        if k in ("135XC", "ATPXC", "NightXC") and k not in ff_custom_keys:
+                            continue
                         parts.append(f"{k} (FF {av:.1f}, LT {bv:.1f})")
+                if not parts:
+                    continue
 
                 flagged.append(
                     {

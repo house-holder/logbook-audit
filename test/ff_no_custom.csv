@@ -1,0 +1,10 @@
+ForeFlight Logbook Export (fixture),This is a tiny synthetic dataset for reproducible tests,,,,,,,,,,,,,,
+Date,AircraftID,From,To,TotalTime,PIC,SIC,Night,Solo,CrossCountry,ActualInstrument,SimulatedInstrument,DualGiven,DualReceived,SimulatedFlight,Distance
+2025-01-01,N123AB,KAAA,KBBB,1.0,1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,120
+2025-01-02,N123AB,KCCC,KDDD,1.1,1.1,0.0,0.4,0.0,1.1,0.0,0.0,0.0,0.0,0.0,140
+2025-01-03,N123AB,KEEE,KFFF,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.2,0.0,0.0,0
+2025-01-04,N123AB,KGGG,KHHH,0.8,0.8,0.0,0.0,0.0,0.8,0.0,0.0,0.0,0.0,0.0,90
+2025-01-10,N777XY,KJFK,KBOS,1.2,1.2,0.0,0.2,0.0,1.2,0.0,0.0,0.0,0.0,0.0,190
+2025-01-10,N777XY,KJFK,KPHL,0.7,0.7,0.0,0.0,0.0,0.7,0.0,0.0,0.0,0.0,0.0,95
+2025-01-20,SIM1,LAB1,LAB2,1.5,0.0,0.0,0.0,0.0,0.0,0.0,1.5,0.0,0.0,1.5,0
+
