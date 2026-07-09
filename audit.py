@@ -4,10 +4,10 @@ import io
 import os
 import re
 import sys
-from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections import defaultdict
+from collections.abc import Iterable
+from dataclasses import dataclass
 
 """
 Note from the repo owner:
@@ -40,8 +40,8 @@ def _style(s: str, *codes: str) -> str:
 
 def _blue(s: str) -> str:
     return _style(s, "34")
-def _blue_bold(s: str) -> str:
-    return _style(s, "1", "34")
+# def _blue_bold(s: str) -> str:
+#     return _style(s, "1", "34")
 
 def _green(s: str) -> str:
     return _style(s, "32")
@@ -50,8 +50,8 @@ def _dim_green(s: str) -> str:
 
 def _red(s: str) -> str:
     return _style(s, "31")
-def _red_bold(s: str) -> str:
-    return _style(s, "1", "31")
+# def _red_bold(s: str) -> str:
+#     return _style(s, "1", "31")
 
 
 def _color_mismatch_reason(reason: str) -> str:
@@ -60,6 +60,8 @@ def _color_mismatch_reason(reason: str) -> str:
         lt_raw = m.group("lt")
         ff = float(ff_raw)
         lt = float(lt_raw)
+        ffStr = f"FF {ff_raw}"
+        ltStr = f"LT {lt_raw}"
 
         if ff < lt:
             ffStr = _red(f"FF {ff_raw}")
@@ -98,18 +100,14 @@ def _is_sim_aircraft_id(aircraft_id: str) -> bool:
     return False
 
 
-def _read_foreflight_flights(path: Path) -> List[Dict[str, str]]:
-    """
-    ForeFlight export is a multi-table CSV. We find the flights header row and then
-    parse all rows whose first column looks like YYYY-MM-DD.
-    """
-    rows: List[List[str]] = []
+def _read_foreflight_flights(path: Path) -> list[dict[str, str]]:
+    rows: list[list[str]] = []
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.reader(f)
         for r in reader:
             rows.append(r)
 
-    header: Optional[List[str]] = None
+    header: list[str] | None = None
     start_idx = None
     for i, r in enumerate(rows):
         if len(r) >= 3 and r[0].strip() == "Date" and r[1].strip() == "AircraftID":
@@ -118,16 +116,16 @@ def _read_foreflight_flights(path: Path) -> List[Dict[str, str]]:
             break
 
     if not header or start_idx is None:
-        raise RuntimeError("Could not find ForeFlight Flights Table header (row starting with 'Date,AircraftID,...').")
+        raise RuntimeError("Failed to find ForeFlight Flights (row 'Date,AircraftID,...').")
 
-    flights: List[Dict[str, str]] = []
+    flights: list[dict[str, str]] = []
     for r in rows[start_idx:]:
         if not r:
             continue
         d = r[0].strip()
         if not DATE_RE.match(d):
             continue
-        rec: Dict[str, str] = {}
+        rec: dict[str, str] = {}
         for j, name in enumerate(header):
             rec[name] = r[j].strip() if j < len(r) else ""
         flights.append(rec)
@@ -135,11 +133,7 @@ def _read_foreflight_flights(path: Path) -> List[Dict[str, str]]:
     return flights
 
 
-def _read_logten_flights(path: Path) -> List[Dict[str, str]]:
-    """
-    LogTen export is TSV with a very wide header. It can contain quoted fields with embedded newlines,
-    so we must use csv.reader (not line-by-line splitting).
-    """
+def _read_logten_flights(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.reader(f, delimiter="\t", quotechar='"')
         try:
@@ -148,11 +142,11 @@ def _read_logten_flights(path: Path) -> List[Dict[str, str]]:
             return []
 
         header = [h.strip() for h in header_raw]
-        flights: List[Dict[str, str]] = []
+        flights: list[dict[str, str]] = []
         for r in reader:
             if not r or (len(r) == 1 and not r[0].strip()):
                 continue
-            rec: Dict[str, str] = {}
+            rec: dict[str, str] = {}
             for j, name in enumerate(header):
                 rec[name] = r[j] if j < len(r) else ""
             # Only keep "real" flight rows: must have a date.
@@ -168,11 +162,11 @@ class FlightKey:
 
 
 def _group_by_date_aircraft(
-    flights: Iterable[Dict[str, str]],
+    flights: Iterable[dict[str, str]],
     date_field: str,
     aircraft_field: str,
-) -> Dict[FlightKey, List[Dict[str, str]]]:
-    grouped: Dict[FlightKey, List[Dict[str, str]]] = defaultdict(list)
+) -> dict[FlightKey, list[dict[str, str]]]:
+    grouped: dict[FlightKey, list[dict[str, str]]] = defaultdict(list)
     for f in flights:
         date = f.get(date_field, "").strip()
         ac = _norm(f.get(aircraft_field, ""))
@@ -182,7 +176,7 @@ def _group_by_date_aircraft(
     return grouped
 
 
-def _score_match(ff: Dict[str, str], lt: Dict[str, str]) -> Tuple[float, float, float]:
+def _score_match(ff: dict[str, str], lt: dict[str, str]) -> tuple[float, float, float]:
     """
     Lower is better. Returned tuple sorts lexicographically:
     - from/to mismatch count (0,1,2)
@@ -211,18 +205,13 @@ def _score_match(ff: Dict[str, str], lt: Dict[str, str]) -> Tuple[float, float, 
 
 
 def _match_flights_greedy(
-    ff_group: List[Dict[str, str]],
-    lt_group: List[Dict[str, str]],
-) -> List[Tuple[Dict[str, str], Optional[Dict[str, str]]]]:
-    """
-    Greedy matching within a (date, aircraft) bucket.
-    For each ForeFlight row, pick the best remaining LogTen candidate by score.
-    """
+    ff_group: list[dict[str, str]],
+    lt_group: list[dict[str, str]],
+) -> list[tuple[dict[str, str], dict[str, str] | None]]:
     remaining = lt_group[:]
-    pairs: List[Tuple[Dict[str, str], Optional[Dict[str, str]]]] = []
+    pairs: list[tuple[dict[str, str], dict[str, str] | None]] = []
 
-    # Process longer flights first to reduce ambiguous "pattern flights" (e.g., 0.7 repeats).
-    def ff_sort_key(r: Dict[str, str]) -> float:
+    def ff_sort_key(r: dict[str, str]) -> float:
         return -_to_float(r.get("TotalTime", ""))
 
     for ff in sorted(ff_group, key=ff_sort_key):
@@ -245,31 +234,26 @@ def _match_flights_greedy(
     return pairs
 
 
-def _sum_field(flights: Iterable[Dict[str, str]], field: str) -> float:
+def _sum_field(flights: Iterable[dict[str, str]], field: str) -> float:
     return sum(_to_float(f.get(field, "")) for f in flights)
 
 
 def _pick_best_custom_time_columns(
-    lt_flights: List[Dict[str, str]],
-    targets: Dict[str, float],
-) -> Dict[str, str]:
-    """
-    Given target totals (e.g., {"135XC": 675.1, "ATPXC": 342.4}), find which LogTen
-    flight_customTimeX columns match those totals best.
-    """
+    lt_flights: list[dict[str, str]],
+    targets: dict[str, float],
+) -> dict[str, str]:
     custom_cols = [f"flight_customTime{i}" for i in range(1, 21)]
     col_sums = {c: _sum_field(lt_flights, c) for c in custom_cols}
 
     remaining = set(custom_cols)
-    mapping: Dict[str, str] = {}
+    mapping: dict[str, str] = {}
     for label, target_total in sorted(targets.items(), key=lambda kv: -kv[1]):
-        # NightXC is usually only populated on flights that are BOTH night AND cross-country.
-        # Restricting the sum to those flights makes the "match by totals" much less ambiguous.
         if label == "NightXC":
             filtered = [
                 r
                 for r in lt_flights
-                if _to_float(_lt_field(r, "flight_night")) > 0.0 and _to_float(_lt_field(r, "flight_crossCountry")) > 0.0
+                if _to_float(_lt_field(r, "flight_night")) > 0.0 and
+                _to_float(_lt_field(r, "flight_crossCountry")) > 0.0
             ]
             col_sums = {c: _sum_field(filtered, c) for c in remaining}
         best_col = None
@@ -285,12 +269,11 @@ def _pick_best_custom_time_columns(
     return mapping
 
 
-def _lt_field(rec: Dict[str, str], name: str) -> str:
-    # Some headers in the file have leading spaces (as seen in the first line).
+def _lt_field(rec: dict[str, str], name: str) -> str:
     return rec.get(name, rec.get(f" {name}", ""))
 
 
-def _extract_hours_foreflight(ff: Dict[str, str]) -> Dict[str, float]:
+def _extract_hours_foreflight(ff: dict[str, str]) -> dict[str, float]:
     return {
         "TotalTime": _to_float(ff.get("TotalTime", "")),
         "PIC": _to_float(ff.get("PIC", "")),
@@ -310,10 +293,10 @@ def _extract_hours_foreflight(ff: Dict[str, str]) -> Dict[str, float]:
 
 
 def _extract_hours_logten(
-    lt: Dict[str, str],
-    custom_map: Dict[str, str],
+    lt: dict[str, str],
+    custom_map: dict[str, str],
     derived_night_xc: bool,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     total = _to_float(_lt_field(lt, "flight_totalTime"))
     night = _to_float(_lt_field(lt, "flight_night"))
     xc = _to_float(_lt_field(lt, "flight_crossCountry"))
@@ -342,8 +325,12 @@ def _extract_hours_logten(
     }
 
 
-def _diff_hours(a: Dict[str, float], b: Dict[str, float], tol: float) -> Dict[str, Tuple[float, float, float]]:
-    diffs: Dict[str, Tuple[float, float, float]] = {}
+def _diff_hours(
+        a: dict[str, float],
+        b: dict[str, float],
+        tol: float
+) -> dict[str, tuple[float, float, float]]:
+    diffs: dict[str, tuple[float, float, float]] = {}
     for k in a.keys():
         av = a.get(k, 0.0)
         bv = b.get(k, 0.0)
@@ -360,20 +347,18 @@ def _fmt_hours(s: str) -> str:
     return f"{v:.1f}"
 
 
-def _shorthand(ff: Dict[str, str]) -> str:
-    return f"{ff.get('Date','').strip()} {_norm(ff.get('AircraftID',''))} {_fmt_hours(ff.get('TotalTime',''))}"
-
-
 def _diff_cell(ff: float, lt: float, tol: float) -> str:
     d = ff - lt
     return "--" if abs(d) <= tol else f"{d:.1f}"
 
 
-def _print_totals_report(*, ff_flights: List[Dict[str, str]], lt_flights: List[Dict[str, str]], ff_totals: Dict[str, float], lt_totals: Dict[str, float], tol: float) -> None:
-    """
-    Clean monospace report (intentionally minimal / human scannable).
-    """
-    rows: List[Tuple[str, float, float]] = [
+def _print_totals_report(
+    *,
+    ff_totals: dict[str, float],
+    lt_totals: dict[str, float],
+    tol: float
+) -> None:
+    rows: list[tuple[str, float, float]] = [
         ("Total Time", ff_totals["TotalTime"], lt_totals["TotalTime"]),
         ("PIC", ff_totals["PIC"], lt_totals["PIC"]),
         ("Night", ff_totals["Night"], lt_totals["Night"]),
@@ -397,81 +382,6 @@ def _print_totals_report(*, ff_flights: List[Dict[str, str]], lt_flights: List[D
         print(_green(line) if is_match else _red(line))
 
 
-def _suggest_nearby_matches(
-    *,
-    missing_side: str,
-    date: str,
-    aircraft: str,
-    total_time: float,
-    from_: str,
-    to: str,
-    candidates: List[Dict[str, str]],
-    date_field: str,
-    aircraft_field: str,
-    total_time_field: str,
-    from_field: str,
-    to_field: str,
-    tol: float,
-    max_days: int = 7,
-    max_suggestions: int = 2,
-) -> List[str]:
-    """
-    Heuristic helper for when a flight is "missing" on one side due to a date mismatch.
-    We DO NOT auto-match; we only print a hint.
-    """
-    try:
-        y, m, d = (int(x) for x in date.split("-"))
-    except Exception:
-        return []
-
-    def day_key(s: str) -> int:
-        try:
-            yy, mm, dd = (int(x) for x in s.split("-"))
-        except Exception:
-            return 10**9
-        # Crude but sufficient for "nearby" within same logbook span: compare as ordinal-ish number.
-        return yy * 372 + mm * 31 + dd
-
-    base = day_key(date)
-    if base >= 10**9:
-        return []
-
-    sug: List[Tuple[float, str]] = []
-    for r in candidates:
-        ac = _norm(r.get(aircraft_field, ""))
-        if ac != aircraft:
-            continue
-        cand_date = r.get(date_field, "").strip()
-        dk = day_key(cand_date)
-        if dk >= 10**9:
-            continue
-        day_diff = abs(dk - base)
-        if day_diff > max_days:
-            continue
-
-        tt = _to_float(r.get(total_time_field, ""))
-        if abs(tt - total_time) > tol:
-            continue
-
-        r_from = _norm(r.get(from_field, ""))
-        r_to = _norm(r.get(to_field, ""))
-        route_penalty = 0.0
-        if from_ and r_from and from_ != r_from:
-            route_penalty += 0.5
-        if to and r_to and to != r_to:
-            route_penalty += 0.5
-
-        score = day_diff + route_penalty
-        label = f"possible {missing_side} match: {cand_date} {ac} {tt:.1f}"
-        if r_from or r_to:
-            label += f" {r_from}->{r_to}"
-        sug.append((score, label))
-
-    sug.sort(key=lambda x: x[0])
-    return [s for _, s in sug[:max_suggestions]]
-
-
-
 def _run_selftest() -> int:
     base = Path(__file__).resolve().parent
     ff = base / "test" / "ff.csv"
@@ -487,12 +397,12 @@ def _run_selftest() -> int:
 
     out = buf.getvalue()
 
-    def require(pattern: str, desc: str) -> Optional[str]:
+    def require(pattern: str, desc: str) -> str | None:
         if re.search(pattern, out, flags=re.M) is None:
             return desc
         return None
 
-    failures: List[str] = []
+    failures: list[str] = []
     failures.extend(
         f
         for f in [
@@ -530,23 +440,18 @@ def _run_selftest() -> int:
     return 0
 
 
-def main(argv: List[str]) -> int:
+def main(argv: list[str]) -> int:
     if len(argv) >= 2 and argv[1] == "test":
         return _run_selftest()
-    if len(argv) < 3:
-        print(
-            "Usage: python audit_logbooks.py <foreflight_csv> <logten_tsv> "
-            "[--tol 0.05] [--custom-night-xc] [--include-sim] [--verbose]"
-        )
-        return 2
 
-    ff_path = Path(argv[1])
-    lt_path = Path(argv[2])
+    ff_path = Path("ff.csv")
+    lt_path = Path("lt.txt")
 
     tol = 0.05
     derived_night_xc = True
     include_sim = False
     verbose = False
+
     i = 3
     while i < len(argv):
         if argv[i] == "--tol" and i + 1 < len(argv):
@@ -600,9 +505,6 @@ def main(argv: List[str]) -> int:
         "NightXC": _sum_field(ff_flights, "[Hours]Night XC"),
     }
 
-    # IMPORTANT: Custom-time auto-detection should only consider the custom hour buckets,
-    # not the full report totals (TotalTime/PIC/etc). If we include those, we "use up"
-    # the 20 customTime columns matching unrelated totals and corrupt the mapping.
     ff_custom_targets = {
         "135XC": ff_totals["135XC"],
         "ATPXC": ff_totals["ATPXC"],
@@ -640,13 +542,13 @@ def main(argv: List[str]) -> int:
         ),
     }
 
-    _print_totals_report(ff_flights=ff_flights, lt_flights=lt_flights, ff_totals=ff_totals, lt_totals=lt_totals, tol=tol)
+    _print_totals_report(ff_totals=ff_totals, lt_totals=lt_totals, tol=tol)
 
     ff_grouped = _group_by_date_aircraft(ff_flights, "Date", "AircraftID")
     lt_grouped = _group_by_date_aircraft(lt_flights, "flight_flightDate", "aircraft_aircraftID")
 
     all_keys = set(ff_grouped.keys()) | set(lt_grouped.keys())
-    flagged: List[Dict[str, str]] = []
+    flagged: list[dict[str, str]] = []
 
     for key in sorted(all_keys, key=lambda k: k.date, reverse=True):
         ff_list = ff_grouped.get(key, [])
@@ -683,13 +585,17 @@ def main(argv: List[str]) -> int:
                 continue
 
             ff_hours = _extract_hours_foreflight(ff)
-            lt_hours = _extract_hours_logten(lt, custom_map=custom_map, derived_night_xc=derived_night_xc)
+            lt_hours = _extract_hours_logten(lt, custom_map=custom_map,
+                                             derived_night_xc=derived_night_xc)
             diffs = _diff_hours(ff_hours, lt_hours, tol=tol)
 
             # Ignore landing count-only diffs by simply not computing them.
             if diffs:
-                parts = []
-                for k in ["TotalTime", "PIC", "Night", "CrossCountry", "ActualInstrument", "SimulatedInstrument", "DualReceived", "DualGiven", "Solo", "135XC", "ATPXC", "NightXC"]:
+                parts: list[str] = []
+                for k in ["TotalTime", "PIC", "Night", "CrossCountry",
+                          "ActualInstrument", "SimulatedInstrument",
+                          "DualReceived", "DualGiven", "Solo", "135XC",
+                          "ATPXC", "NightXC"]:
                     if k in diffs:
                         av, bv, _ = diffs[k]
                         parts.append(f"{k} (FF {av:.1f}, LT {bv:.1f})")
