@@ -30,6 +30,9 @@ Run from the repo root:
 python audit.py
 ```
 
+That's it. The self-test is `python audit.py test`. If you run the test files manually, you will see:
+![Screenshot of verbose test run output (expected errors & times)](test/output.png)
+
 ## Options
 
 You shouldn't need to use these, and I mostly took advantage of them while testing.
