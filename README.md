@@ -9,8 +9,8 @@ Compare ForeFlight and LogTen logbook exports and flag discrepancies.
 1. Login to ForeFlight on a web browser.
 2. From the **Logbook** tab, go to **Export** and obtain a local copy of the file.
 3. Move the file to the repo directory.
-[!IMPORTANT]
-Filename must be `ff.csv`.
+> [!IMPORTANT]
+> Filename must be `ff.csv`.
 
 ### LogTen
 
@@ -18,11 +18,11 @@ Filename must be `ff.csv`.
 2. **Configure Report**, confirm "All" selected, and **Generate**.
 3. I use the dialogue to email this file to myself, then save it to the repo dir
    as well.
-[!IMPORTANT]
-Filename must be `lt.txt`.
+> [!IMPORTANT]
+> Filename must be `lt.txt`.
 
-[!NOTE]
-The `.gitignore` already excludes `ff.csv` and `lt.txt`.
+> [!NOTE]
+> The `.gitignore` already excludes `ff.csv` and `lt.txt`.
 
 ## Usage
 
