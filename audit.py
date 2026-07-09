@@ -40,18 +40,15 @@ def _style(s: str, *codes: str) -> str:
 
 def _blue(s: str) -> str:
     return _style(s, "34")
-# def _blue_bold(s: str) -> str:
-#     return _style(s, "1", "34")
 
 def _green(s: str) -> str:
     return _style(s, "32")
+
 def _dim_green(s: str) -> str:
     return _style(s, "2", "32")
 
 def _red(s: str) -> str:
     return _style(s, "31")
-# def _red_bold(s: str) -> str:
-#     return _style(s, "1", "31")
 
 
 def _color_mismatch_reason(reason: str) -> str:
@@ -341,10 +338,7 @@ def _diff_hours(
 
 
 def _fmt_hours(s: str) -> str:
-    v = _to_float(s)
-    if not v:
-        return "0.0"
-    return f"{v:.1f}"
+    return f"{_to_float(s):.1f}"
 
 
 def _diff_cell(ff: float, lt: float, tol: float) -> str:
@@ -361,6 +355,7 @@ def _print_totals_report(
     rows: list[tuple[str, float, float]] = [
         ("Total Time", ff_totals["TotalTime"], lt_totals["TotalTime"]),
         ("PIC", ff_totals["PIC"], lt_totals["PIC"]),
+        ("  + Non-CFI", ff_totals["PICNonCFI"], lt_totals["PICNonCFI"]),
         ("Night", ff_totals["Night"], lt_totals["Night"]),
         ("Solo", ff_totals["Solo"], lt_totals["Solo"]),
         ("XC", ff_totals["CrossCountry"], lt_totals["CrossCountry"]),
@@ -447,12 +442,20 @@ def main(argv: list[str]) -> int:
     ff_path = Path("ff.csv")
     lt_path = Path("lt.txt")
 
+    pos = 1
+    if len(argv) > pos and not argv[pos].startswith('-'):
+        ff_path = Path(argv[pos])
+        pos += 1
+    if len(argv) > pos and not argv[pos].startswith('-'):
+        lt_path = Path(argv[pos])
+        pos += 1
+
     tol = 0.05
     derived_night_xc = True
     include_sim = False
     verbose = False
 
-    i = 3
+    i = pos
     while i < len(argv):
         if argv[i] == "--tol" and i + 1 < len(argv):
             tol = float(argv[i + 1])
@@ -504,6 +507,7 @@ def main(argv: list[str]) -> int:
         "ATPXC": _sum_field(ff_flights, "[Hours]ATPXC"),
         "NightXC": _sum_field(ff_flights, "[Hours]Night XC"),
     }
+    ff_totals["PICNonCFI"] = ff_totals["PIC"] - ff_totals["DualGiven"]
 
     ff_custom_targets = {
         "135XC": ff_totals["135XC"],
@@ -541,6 +545,7 @@ def main(argv: list[str]) -> int:
             else (_sum_field(lt_flights, custom_map.get("NightXC", "")) if custom_map.get("NightXC") else 0.0)
         ),
     }
+    lt_totals["PICNonCFI"] = lt_totals["PIC"] - lt_totals["DualGiven"]
 
     _print_totals_report(ff_totals=ff_totals, lt_totals=lt_totals, tol=tol)
 
