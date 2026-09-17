@@ -1,2 +1,5 @@
 /ff.csv
 /lt.txt
+
+__pycache__/
+*.py[cod]

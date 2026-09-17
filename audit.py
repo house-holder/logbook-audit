@@ -4,6 +4,7 @@ import io
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from collections import defaultdict
 from collections.abc import Iterable
@@ -23,6 +24,11 @@ You've been warned.
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SIM_AIRCRAFT_RE = re.compile(r"^(UAA\s*SIM\b|SIM\d+\b|AATD\b|FTD\b)")
 MISMATCH_RE = re.compile(r"\(FF (?P<ff>-?\d+(?:\.\d+)?), LT (?P<lt>-?\d+(?:\.\d+)?)\)")
+
+FF_STAMP_FMT = "%Y-%m-%d_%H_%M_%S"
+LT_STAMP_FMT = "%Y-%m-%d %H-%M-%S"
+FF_STAMP_RE = re.compile(r"logbook_(\d{4}-\d{2}-\d{2}_\d{2}_\d{2}_\d{2})\.csv$")
+LT_STAMP_RE = re.compile(r"Export Flights \(Tab\) - (\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})\.txt$")
 
 
 def _supports_color() -> bool:
@@ -95,6 +101,35 @@ def _is_sim_aircraft_id(aircraft_id: str) -> bool:
     if "REDBIRD" in s:
         return True
     return False
+
+
+def _find_newest(
+    dirs: Iterable[Path],
+    glob_pat: str,
+    stamp_re: re.Pattern[str],
+    stamp_fmt: str,
+) -> Path | None:
+    """Return the newest matching file across the given directories.
+
+    Newness comes from the export timestamp embedded in the filename when
+    present, falling back to the file's modification time otherwise.
+    """
+    best: Path | None = None
+    best_key: tuple[float, float] | None = None
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for p in d.glob(glob_pat):
+            m = stamp_re.search(p.name)
+            stamp = datetime.strptime(m.group(1), stamp_fmt) if m else None
+            try:
+                mt = p.stat().st_mtime
+            except OSError:
+                mt = 0.0
+            key = (stamp.timestamp() if stamp else mt, mt)
+            if best_key is None or key > best_key:
+                best, best_key = p, key
+    return best
 
 
 def _read_foreflight_flights(path: Path) -> tuple[list[str], list[dict[str, str]]]:
@@ -522,8 +557,9 @@ def main(argv: list[str]) -> int:
     if len(argv) >= 2 and argv[1] == "test":
         return _run_selftest()
 
-    ff_path = Path("ff.csv")
-    lt_path = Path("lt.txt")
+    ff_path: Path | None = None
+    lt_path: Path | None = None
+    search_dirs: list[Path] | None = None
 
     pos = 1
     if len(argv) > pos and not argv[pos].startswith('-'):
@@ -552,9 +588,54 @@ def main(argv: list[str]) -> int:
         elif argv[i] == "--verbose":
             verbose = True
             i += 1
+        elif argv[i] == "--dir" and i + 1 < len(argv):
+            search_dirs = [Path(argv[i + 1]).expanduser()]
+            i += 2
         else:
             print(f"Unknown arg: {argv[i]}")
             return 2
+
+    if ff_path is None or lt_path is None:
+        if search_dirs is None:
+            home = Path.home()
+            search_dirs = [home / "Downloads", home / "downloads"]
+            search_dirs = [d for d in search_dirs if d.is_dir()]
+            if not search_dirs:
+                print("Could not find a ~/Downloads or ~/downloads folder.")
+                print("Pass the --dir flag to point at your logbook exports folder.")
+                return 1
+        for d in search_dirs:
+            if not d.is_dir():
+                print(f"Source dir not found or unreadable: {d}")
+                return 1
+
+        if ff_path is None:
+            ff_path = _find_newest(search_dirs, "logbook_*.csv", FF_STAMP_RE, FF_STAMP_FMT)
+        if lt_path is None:
+            lt_path = _find_newest(search_dirs, "Export Flights (Tab) - *.txt", LT_STAMP_RE, LT_STAMP_FMT)
+
+        if ff_path is None and lt_path is None:
+            print("Could not find any logbook exports.")
+            print(f"Searched: {', '.join(str(d) for d in search_dirs)}")
+            print("Expected a ForeFlight export matching 'logbook_YYYY-MM-DD_HH_MM_SS.csv'")
+            print('and a LogTen export matching "Export Flights (Tab) - YYYY-MM-DD HH-MM-SS.txt".')
+            print("Pass the --dir flag to point at a different folder, or provide the file paths as arguments.")
+            return 1
+        if ff_path is None:
+            print("Found a LogTen export but no ForeFlight export.")
+            print(f"LogTen export found: {lt_path}")
+            print(f"Searched: {', '.join(str(d) for d in search_dirs)}")
+            print("Expected a matching ForeFlight export like 'logbook_YYYY-MM-DD_HH_MM_SS.csv'.")
+            return 1
+        if lt_path is None:
+            print("Found a ForeFlight export but no LogTen export.")
+            print(f"ForeFlight export found: {ff_path}")
+            print(f"Searched: {', '.join(str(d) for d in search_dirs)}")
+            print('Expected a matching LogTen export like "Export Flights (Tab) - YYYY-MM-DD HH-MM-SS.txt".')
+            return 1
+
+        print(_dim_green(f"ForeFlight: {ff_path}"))
+        print(_dim_green(f"LogTen:     {lt_path}"))
 
     ff_header, ff_flights = _read_foreflight_flights(ff_path)
     lt_flights = _read_logten_flights(lt_path)

@@ -11,16 +11,17 @@ Compare ForeFlight and LogTen logbook exports and flag discrepancies.
 
 1. Login to ForeFlight on a web browser.
 2. From the **Logbook** tab, go to **Export** and obtain a local copy of the file.
-3. Move the file to the repo directory as `ff.csv`.
 
 ### LogTen
 
 1. From the **Logbook** tab, go to **Reports → Exporters → Export Flights (Tab)**.
 2. **Configure Report**, confirm "All" selected, and **Generate**. Use the dialogue to obtain this file in whatever way you choose.
-3. Move the file to the repo directory as `lt.txt`.
 
 > [!NOTE]
-> The filenames are hardcoded paths instead of requiring args. `ff.csv` and `lt.txt` are also in the gitignore for convenience.
+> You don't need to rename or move the files. The script looks for the most recent ForeFlight
+> (`logbook_YYYY-MM-DD_HH_MM_SS.csv`) and LogTen (`Export Flights (Tab) - ...txt`) exports in
+> `~/Downloads` (or `~/downloads`), and reads them in place. Use `--dir <folder>` to point at a
+> different location, or pass the two file paths as arguments to override discovery entirely.
 
 ## Usage
 
@@ -39,6 +40,7 @@ You shouldn't need to use these, and I mostly took advantage of them while testi
 
 | Flag | Effect |
 |------|--------|
+| `--dir FOLDER` | Search this folder for the most recent exports instead of `~/Downloads` |
 | `--tol N` | Tolerance in hours before a difference is flagged (default: 0.05) |
 | `--custom-night-xc` | Use a dedicated custom column for Night XC in LogTen instead of deriving it |
 | `--include-sim` | Include simulator/FTS entries in the comparison |
