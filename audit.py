@@ -89,7 +89,8 @@ def _to_float(s: str) -> float:
 
 
 def _norm(s: str) -> str:
-    return (s or "").strip().upper().split('/')[0]
+    # return (s or "").strip().upper().split('/')[0]
+    return (s or "").upper().split('/')[0].strip()
 
 
 def _is_sim_aircraft_id(aircraft_id: str) -> bool:
